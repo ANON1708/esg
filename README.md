@@ -106,3 +106,11 @@ The app exports a CSV file with:
 - Risk Level label
 - Risk Score Delta
 
+<img width="1286" alt="Screenshot 2025-03-26 at 10 06 18 PM" src="https://github.com/user-attachments/assets/f21c8e49-cc09-4835-971b-23ec96fb273a" />
+<img width="1308" alt="Screenshot 2025-03-26 at 10 06 40 PM" src="https://github.com/user-attachments/assets/b3342933-f21a-4e0f-9032-22dc5867a97c" />
+<img width="1321" alt="Screenshot 2025-03-26 at 10 06 51 PM" src="https://github.com/user-attachments/assets/17ea1a6e-980c-4c55-aaee-110612d95792" />
+<img width="1263" alt="Screenshot 2025-03-26 at 10 07 13 PM" src="https://github.com/user-attachments/assets/d58f1f60-4f7f-4adb-91c9-21eecdf64c63" />
+<img width="1215" alt="Screenshot 2025-03-26 at 10 07 21 PM" src="https://github.com/user-attachments/assets/85dbca79-020f-456c-b9b3-51d7476da9e8" />
+
+
+
