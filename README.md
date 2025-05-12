@@ -176,7 +176,7 @@ python3 esg_model.py gradio_ui
 > Shareable link will be printed in console after launch.
 
 ![image](https://github.com/user-attachments/assets/8fb17e3c-040b-4977-8bd5-ece34f003937)
-![image](https://github.com/user-attachments/assets/75f5397e-2116-467e-a80c-fb99f6744cda)
+![image](https://github.com/user-attachments/assets/f9da8963-56b5-462c-93aa-8a5543f0288d)
 
 
 
