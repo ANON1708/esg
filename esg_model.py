@@ -1,148 +1,200 @@
-import streamlit as st
+# esg_model.py — ESG Risk Monitoring from Merged Dataset + Gradio App
+
 import pandas as pd
 import numpy as np
+import joblib
+import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from transformers import pipeline
 from newsapi import NewsApiClient
 from fuzzywuzzy import fuzz
-import joblib
 import os
-import matplotlib.pyplot as plt
-import seaborn as sns
+import sys
+import gradio as gr
 
-# Limit threads to prevent crashes
-os.environ["OMP_NUM_THREADS"] = "1"
+MODEL_PATH = os.getenv("MODEL_PATH", "esg_model.pkl")
+DATA_PATH = os.getenv("DATA_PATH", "merged_esg_data.csv")
+HISTORY_FILE = os.getenv("HISTORY_FILE", "esg_score_history.csv")
+DELTA_LOG_FILE = os.getenv("DELTA_LOG_FILE", "delta_log.csv")
 
-st.title("⚡ Realtime ESG Risk Score Model")
-st.markdown("This app predicts real-time ESG risk scores based on company ESG data and ESG-related news sentiment using a pretrained XGBoost model.")
+# === Settings ===
+ALERT_THRESHOLD = 10.0  # Risk difference needed to trigger alert
+TOP_N = 3  # Companies to include in alert
 
-# Load pretrained XGBoost model
-model = joblib.load("esg_model.pkl")
-
-# Load default S&P 500 ESG data
-df = pd.read_csv("SP 500 ESG Risk Ratings.csv")
-st.subheader("📂 Preview of Default ESG Dataset")
-st.dataframe(df.head())
-
-# FinBERT pipeline
+# === Load FinBERT sentiment model ===
 finbert = pipeline("text-classification", model="ProsusAI/finbert")
 
-# NewsAPI setup
-newsapi = NewsApiClient(api_key=st.secrets["NEWS_API_KEY"])
+# === Load trained ESG Risk model ===
+model = joblib.load(MODEL_PATH)
 
-# Fetch ESG news
-st.info("Fetching ESG-related news articles from the past few days...")
-news_headlines = []
-for page in range(1, 4):
-    articles = newsapi.get_everything(q='ESG sustainability', language='en', sort_by='publishedAt', page_size=20, page=page)
-    news_headlines += [article['title'] for article in articles['articles']]
+# === Load merged ESG dataset ===
+print("🔄 Loading merged ESG dataset...")
+df = pd.read_csv(DATA_PATH)
 
-st.success(f"Fetched {len(news_headlines)} news articles (Timeframe: Past ~3 days via NewsAPI)")
+# === Clean and prepare ===
+df = df.dropna(subset=["Environment Risk Score", "Governance Risk Score", "Social Risk Score", "Total ESG Risk score"])
+df["Controversy Score"] = df.get("Controversy Score", 0)
+df["ESG Risk Percentile"] = (
+    df["ESG Risk Percentile"].astype(str).str.extract(r'(\d+)').astype(float).fillna(50.0)
+)
+df["Clean Name"] = df["Name"].str.lower().str.replace(r'[\W_]+', ' ', regex=True)
 
-# Run FinBERT on headlines
-news_sentiments = [finbert(headline) for headline in news_headlines]
+if len(sys.argv) == 1 or sys.argv[1] != "gradio_ui":
+    # === Generate fresh sentiment scores using FinBERT ===
+    print("🚀 Generating sentiment scores using FinBERT...")
+    newsapi = NewsApiClient(api_key=os.getenv("NEWS_API_KEY", ""))
+    df["News Sentiment Score"] = 0.0
+    sentiment_mapping = {"positive": 1, "neutral": 0, "negative": -1}
 
-# Clean and prepare data
-df = df.dropna(subset=["Environment Risk Score", "Governance Risk Score", "Social Risk Score"])
-df.fillna({
-    "Controversy Score": df["Controversy Score"].median(),
-    "Sector": "Unknown",
-    "Industry": "Unknown"
-}, inplace=True)
-df["ESG Risk Percentile"] = df["ESG Risk Percentile"].astype(str).str.extract(r'(\d+)').astype(float)
-df["Clean Name"] = df["Name"].str.lower().str.replace(r'[^\w\s]', '', regex=True)
-
-# Match sentiment to companies
-df["News Sentiment"] = "neutral"
-df["News Sentiment Score"] = 0.0
-company_sentiments = {}
-for i, headline in enumerate(news_headlines):
-    headline_lower = headline.lower()
     for idx, row in df.iterrows():
-        score = fuzz.partial_ratio(row["Clean Name"], headline_lower)
-        if score >= 60:
-            symbol = row["Symbol"]
-            if symbol not in company_sentiments:
-                company_sentiments[symbol] = []
-            company_sentiments[symbol].append(news_sentiments[i][0]["label"])
+        name = row["Clean Name"]
+        try:
+            articles = newsapi.get_everything(q=name, language='en', sort_by='relevancy', page_size=5)
+            headlines = [article['title'] for article in articles['articles'] if article['title']]
+            sentiments = [finbert(h)[0]['label'].lower() for h in headlines]
+            if sentiments:
+                avg = sum(sentiment_mapping.get(s, 0) for s in sentiments) / len(sentiments)
+                df.at[idx, "News Sentiment Score"] = avg
+        except Exception as e:
+            print(f"⚠️ Skipping {name}: {e}")
+            continue
 
-matched_count = 0
-for idx, row in df.iterrows():
-    symbol = row["Symbol"]
-    if symbol in company_sentiments:
-        labels = company_sentiments[symbol]
-        avg_score = sum({"positive": 1, "neutral": 0, "negative": -1}[l] for l in labels) / len(labels)
-        df.at[idx, "News Sentiment Score"] = avg_score
-        df.at[idx, "News Sentiment"] = "positive" if avg_score > 0.25 else "negative" if avg_score < -0.25 else "neutral"
-        matched_count += 1
+    # === Predict ESG Risk ===
+    features = ["Environment Risk Score", "Governance Risk Score", "Social Risk Score",
+                "Controversy Score", "ESG Risk Percentile", "News Sentiment Score"]
+    X = df[features]
 
-st.write(f"✅ Sentiment coverage: {matched_count / len(df):.0%}")
+    print("🚀 Predicting updated ESG Risk Scores...")
+    df["Predicted ESG Risk Score"] = model.predict(X)
 
-# Prediction only (no retraining)
-features = ["Environment Risk Score", "Governance Risk Score", "Social Risk Score", "Controversy Score", "ESG Risk Percentile", "News Sentiment Score"]
-X = df[features]
-df["Predicted ESG Risk Score"] = model.predict(X)
+    # === Add timestamp for tracking ===
+    timestamp = datetime.datetime.now()
+    df["Timestamp"] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    df["Date"] = timestamp.date()
 
-# Add Risk Level interpretation
-def interpret_risk(score):
-    if score < 10:
-        return "Negligible"
-    elif score < 20:
-        return "Low"
-    elif score < 30:
-        return "Medium"
-    elif score < 40:
-        return "High"
+    # === Update history file ===
+    print("🗂️ Updating ESG risk history...")
+    try:
+        history_df = pd.read_csv(HISTORY_FILE)
+        full_history = pd.concat([history_df, df], ignore_index=True)
+    except FileNotFoundError:
+        print("🎒 No previous history found. Creating new history.")
+        full_history = df.copy()
+
+    full_history.to_csv(HISTORY_FILE, index=False)
+
+    # === Analyze ESG Risk Changes ===
+    print("🔍 Checking for significant ESG risk changes...")
+    try:
+        full_history["Timestamp"] = pd.to_datetime(full_history["Timestamp"])
+    except Exception as e:
+        print("❌ Error parsing Timestamp column:", e)
+        exit()
+
+    if full_history["Timestamp"].nunique() < 2:
+        print("ℹ️ Not enough entries yet to detect changes.")
     else:
-        return "Severe"
+        deltas = []
+        for symbol in full_history["Symbol"].unique():
+            symbol_scores = full_history[full_history["Symbol"] == symbol].sort_values("Timestamp")
+            if len(symbol_scores) >= 2:
+                latest = symbol_scores.iloc[-1]
+                previous = symbol_scores.iloc[-2]
+                delta = latest["Predicted ESG Risk Score"] - previous["Predicted ESG Risk Score"]
+                deltas.append({
+                    "Symbol": symbol,
+                    "Previous Timestamp": previous["Timestamp"],
+                    "Latest Timestamp": latest["Timestamp"],
+                    "Previous Score": previous["Predicted ESG Risk Score"],
+                    "Latest Score": latest["Predicted ESG Risk Score"],
+                    "Delta": delta
+                })
 
-df["Risk Level"] = df["Predicted ESG Risk Score"].apply(interpret_risk)
-df["Risk Score Delta"] = df["Predicted ESG Risk Score"] - df["Total ESG Risk score"]
+        delta_df = pd.DataFrame(deltas)
 
-# Choose which score to view
-st.subheader("📊 Choose Score Type to Display")
-score_option = st.selectbox("Select ESG Score Type", ["Predicted ESG Risk Score", "Total ESG Risk score"])
+        if not delta_df.empty:
+            delta_df.to_csv(DELTA_LOG_FILE, mode='a', index=False, header=not os.path.exists(DELTA_LOG_FILE))
 
-# User search for specific company
-st.subheader("🔍 Search ESG Score for a Company")
-search_name = st.text_input("Enter Company Name or Symbol to check ESG Risk")
-if search_name:
-    search_name_clean = search_name.lower().strip()
-    matches = df[df["Name"].str.lower().str.contains(search_name_clean) | df["Symbol"].str.lower().str.contains(search_name_clean)]
-    if not matches.empty:
-        st.write("### ESG Risk for Matching Companies")
-        st.dataframe(matches[["Symbol", "Name", score_option, "Risk Level", "Risk Score Delta"]])
-    else:
-        st.warning("No matching companies found in the dataset.")
+            for _, row in delta_df.iterrows():
+                full_history.loc[
+                    (full_history["Symbol"] == row["Symbol"]) &
+                    (full_history["Timestamp"] == row["Latest Timestamp"]),
+                    "Delta"
+                ] = row["Delta"]
 
-# Search custom company with manual entry
-df_input = st.text_input("🔍 Predict ESG score for any company (type name)")
-if df_input:
-    with st.spinner("Predicting ESG Risk using sentiment for: " + df_input):
-        sentiment_result = finbert(df_input)
-        label = sentiment_result[0]['label']
-        score = {"positive": 1, "neutral": 0, "negative": -1}[label]
-        st.success(f"Sentiment for '{df_input}' is {label} ({score}) — based on headlines fetched in the past ~3 days")
-        st.write("This is a basic text-level estimation. For full ESG prediction, please match to company profiles.")
+            full_history.to_csv(HISTORY_FILE, index=False)
 
-# Show top 10 risky companies
-st.subheader("🔍 Top 10 Companies by Predicted ESG Risk")
-st.dataframe(df[["Symbol", "Name", "Predicted ESG Risk Score", "Total ESG Risk score", "Risk Level", "Risk Score Delta"]]
-             .sort_values("Predicted ESG Risk Score", ascending=False)
-             .head(10))
+            risk_alerts = delta_df[delta_df["Delta"].abs() >= ALERT_THRESHOLD].sort_values("Delta", ascending=False).head(TOP_N)
 
-# 📊 Visualization: Distribution of Predicted Risk Scores
-st.subheader("📈 ESG Risk Score Distribution")
-fig, ax = plt.subplots()
-sns.histplot(df["Predicted ESG Risk Score"], kde=True, bins=30, ax=ax)
-ax.set_xlabel("Predicted ESG Risk Score")
-ax.set_ylabel("Count")
-st.pyplot(fig)
+            if risk_alerts.empty:
+                print("✅ No significant ESG risk differences found.")
+            else:
+                print("📤 Sending alert email...")
 
-# 📊 Visualization: Risk Levels
-st.subheader("📊 Risk Level Breakdown")
-risk_counts = df["Risk Level"].value_counts().sort_index()
-st.bar_chart(risk_counts)
+                sender = "irabadyal8@gmail.com"
+                receiver = "irabadyal8@gmail.com"
+                password = "xxx!"  # Handle securely
 
-# 💾 Download full results
-csv = df.to_csv(index=False)
-st.download_button("📥 Download Full ESG Risk Predictions", data=csv, file_name="esg_predictions.csv", mime="text/csv")
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = "🚨 ESG Risk Alert: Significant Differences Detected"
+                msg["From"] = sender
+                msg["To"] = receiver
+
+                text_body = f"Significant ESG Risk Score changes (Δ > {ALERT_THRESHOLD}):\n\n"
+                for _, row in risk_alerts.iterrows():
+                    text_body += f"{row['Symbol']}: {row['Previous Score']:.2f} → {row['Latest Score']:.2f} (Δ {row['Delta']:.2f})\n"
+
+                msg.attach(MIMEText(text_body, "plain"))
+
+                try:
+                    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                        server.login(sender, password)
+                        server.sendmail(sender, receiver, msg.as_string())
+                    print("✅ Email sent successfully!")
+                except Exception as e:
+                    print(f"❌ Failed to send email: {e}")
+
+# === Optional Gradio Interface ===
+if len(sys.argv) > 1 and sys.argv[1] == "gradio_ui":
+    features = ["Environment Risk Score", "Governance Risk Score", "Social Risk Score",
+                "Controversy Score", "ESG Risk Percentile", "News Sentiment Score"]
+
+    def predict_esg(company_name):
+        row = df[df["Name"] == company_name]
+        if row.empty:
+            return f"❌ Company '{company_name}' not found in the dataset."
+
+        input_row = row.iloc[0]
+        input_features = []
+        missing_features = []
+
+        for f in features:
+            val = input_row.get(f)
+            if pd.isna(val):
+                missing_features.append(f)
+                input_features.append(0.0 if f == "News Sentiment Score" else df[f].mean())
+            else:
+                input_features.append(float(val))
+
+        if len(missing_features) >= 2:
+            return f"⚠️ Cannot predict: Missing values for multiple features: {', '.join(missing_features)}."
+
+        try:
+            input_array = np.array(input_features).reshape(1, -1)
+            pred = model.predict(input_array)[0]
+            return (
+                f"✅ Predicted ESG Risk Score for **{company_name}**: {pred:.2f} "
+                f"(missing: {', '.join(missing_features) if missing_features else 'None'})"
+            )
+        except Exception as e:
+            return f"❌ Prediction error: {e}"
+
+    company_list = df["Name"].unique().tolist()
+    gr.Interface(
+        fn=predict_esg,
+        inputs=gr.Dropdown(choices=company_list, label="Select a Company"),
+        outputs="text",
+        title="📊 ESG Risk Predictor"
+    ).launch(share=True)
