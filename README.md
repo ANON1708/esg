@@ -1,7 +1,7 @@
 # peacepie
 # 📘 ESG Risk Monitoring & Forecasting Platform
 
-A real-time ESG intelligence tool designed for sustainable finance, enabling analysts to predict and monitor ESG risk through sentiment-aware modeling — aligned with SDG investment strategies and regulatory transparency goals.
+An ESG intelligence tool designed for sustainable finance, enabling analysts to predict and monitor ESG risk through sentiment-aware modeling — aligned with SDG investment strategies and regulatory transparency goals.
 
 
 ---
