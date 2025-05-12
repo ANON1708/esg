@@ -1,102 +1,110 @@
+# train_model.py — Updated to create merged dataset first
+
 import pandas as pd
 import numpy as np
-from transformers import pipeline
-from newsapi import NewsApiClient
-from fuzzywuzzy import fuzz
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import xgboost as xgb
 import joblib
+from transformers import pipeline
+from newsapi import NewsApiClient
 import os
 
-# Limit threads to prevent crash
-os.environ["OMP_NUM_THREADS"] = "1"
+MODEL_PATH = os.getenv("MODEL_PATH", "esg_model.pkl")
+DATA_PATH = os.getenv("DATA_PATH", "merged_esg_data.csv")
+HISTORY_FILE = os.getenv("HISTORY_FILE", "esg_score_history.csv")
+DELTA_LOG_FILE = os.getenv("DELTA_LOG_FILE", "delta_log.csv")
 
-# Load ESG dataset
-df = pd.read_csv("SP 500 ESG Risk Ratings.csv")
 
-# Drop rows with missing key scores
-df = df.dropna(subset=["Total ESG Risk score", "Environment Risk Score", "Governance Risk Score", "Social Risk Score"])
+# === Load and Combine Datasets ===
+print("🔄 Loading datasets...")
 
-# Fill missing values
-df.fillna({
-    "Controversy Score": df["Controversy Score"].median(),
-    "Sector": "Unknown",
-    "Industry": "Unknown"
-}, inplace=True)
+# Load existing S&P 500 dataset
+df_sp500 = pd.read_csv("SP 500 ESG Risk Ratings.csv")
 
-# Clean ESG Risk Percentile
-df["ESG Risk Percentile"] = df["ESG Risk Percentile"].astype(str).str.extract(r'(\d+)').astype(float)
+# Load additional ESG dataset
+df_extra = pd.read_csv("data.csv")
 
-# Normalize company names
-df["Clean Name"] = df["Name"].str.lower().str.replace(r"[^\w\s]", "", regex=True)
+# Standardize column names for extra dataset
+cols = {
+    "ticker": "Symbol",
+    "name": "Name",
+    "environment_score": "Environment Risk Score",
+    "social_score": "Social Risk Score",
+    "governance_score": "Governance Risk Score",
+    "total_score": "Total ESG Risk score"
+}
+df_extra = df_extra.rename(columns=cols)
+df_extra["Controversy Score"] = 0
+df_extra["ESG Risk Percentile"] = 50  # default fallback if missing
 
-# Load FinBERT pipeline
+required_cols = ["Symbol", "Name", "Environment Risk Score", "Social Risk Score", "Governance Risk Score",
+                 "Controversy Score", "ESG Risk Percentile", "Total ESG Risk score"]
+
+# Combine the two datasets
+df_combined = pd.concat([df_sp500[required_cols], df_extra[required_cols]], ignore_index=True)
+
+print(f"✅ Combined dataset shape: {df_combined.shape}")
+
+# === Save merged dataset ===
+df_combined.to_csv("merged_esg_data.csv", index=False)
+print("✅ Merged dataset saved as 'merged_esg_data.csv'")
+
+# === Clean & Initialize ===
+df_combined = df_combined.dropna(subset=["Environment Risk Score", "Social Risk Score", "Governance Risk Score", "Total ESG Risk score"])
+df_combined["ESG Risk Percentile"] = (
+    df_combined["ESG Risk Percentile"].astype(str).str.extract(r'(\d+)').astype(float).fillna(50.0)
+)
+df_combined["News Sentiment Score"] = 0.0
+
+# === Load FinBERT + NewsAPI ===
+print("🚀 Fetching FinBERT sentiment for training data...")
 finbert = pipeline("text-classification", model="ProsusAI/finbert")
+newsapi = NewsApiClient(api_key=os.getenv("NEWS_API_KEY", ""))
 
-# NewsAPI setup
-newsapi = NewsApiClient(api_key="fcda71eae5464edaa75e8b5839ac30cb")  # Replace or load from secrets
+df_combined["Clean Name"] = df_combined["Name"].str.lower().str.replace(r'[^\w\s]', '', regex=True)
 
-# Fetch ESG-related headlines
-news_headlines = []
-for page in range(1, 4):
-    articles = newsapi.get_everything(q='ESG sustainability', language='en', sort_by='publishedAt', page_size=20, page=page)
-    news_headlines += [article['title'] for article in articles['articles']]
+for idx, row in df_combined.iterrows():
+    name = row["Clean Name"]
+    try:
+        articles = newsapi.get_everything(q=name, language='en', sort_by='relevancy', page_size=5)
+        headlines = [a['title'] for a in articles['articles'] if a['title']]
+        sentiments = [finbert(h)[0]['label'] for h in headlines]
+        if sentiments:
+            avg = sum({"positive": 1, "neutral": 0, "negative": -1}[s] for s in sentiments) / len(sentiments)
+            df_combined.at[idx, "News Sentiment Score"] = avg
+    except:
+        continue
 
-# Run FinBERT on headlines
-news_sentiments = [finbert(headline) for headline in news_headlines]
+# === Train-Test Split ===
+features = ["Environment Risk Score", "Governance Risk Score", "Social Risk Score",
+            "Controversy Score", "ESG Risk Percentile", "News Sentiment Score"]
+target = "Total ESG Risk score"
 
-# Match sentiments to companies
-df["News Sentiment"] = "neutral"
-df["News Sentiment Score"] = 0.0
-company_sentiments = {}
+X = df_combined[features]
+y = df_combined[target]
 
-for i, headline in enumerate(news_headlines):
-    headline_lower = headline.lower()
-    for idx, row in df.iterrows():
-        score = fuzz.partial_ratio(row["Clean Name"], headline_lower)
-        if score >= 60:
-            symbol = row["Symbol"]
-            if symbol not in company_sentiments:
-                company_sentiments[symbol] = []
-            company_sentiments[symbol].append(news_sentiments[i][0]["label"])
-
-matched_count = 0
-for idx, row in df.iterrows():
-    symbol = row["Symbol"]
-    if symbol in company_sentiments:
-        labels = company_sentiments[symbol]
-        avg_score = sum({"positive": 1, "neutral": 0, "negative": -1}[l] for l in labels) / len(labels)
-        df.at[idx, "News Sentiment Score"] = avg_score
-        df.at[idx, "News Sentiment"] = "positive" if avg_score > 0.25 else "negative" if avg_score < -0.25 else "neutral"
-        matched_count += 1
-
-print(f"✅ Sentiment coverage: {matched_count / len(df):.0%}")
-
-# Define features + target
-features = ["Environment Risk Score", "Governance Risk Score", "Social Risk Score", "Controversy Score", "ESG Risk Percentile", "News Sentiment Score"]
-X = df[features]
-y = df["Total ESG Risk score"]
-
-# Split data
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+print(f"📊 Training Data: {X_train.shape}, Testing Data: {X_test.shape}")
 
-# Train XGBoost model
-model = xgb.XGBRegressor(objective="reg:squarederror", n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
-model.fit(X_train, y_train)
+# === Train XGBoost ===
+xgb_model = xgb.XGBRegressor(
+    objective="reg:squarederror", n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
 
-# Predict & evaluate
-y_pred = model.predict(X_test)
+print("🚀 Training model...")
+xgb_model.fit(X_train, y_train)
+
+# === Evaluate ===
+y_pred = xgb_model.predict(X_test)
 mae = mean_absolute_error(y_test, y_pred)
 mse = mean_squared_error(y_test, y_pred)
 r2 = r2_score(y_test, y_pred)
 
 print("\n📊 Model Evaluation:")
-print(f"✅ Mean Absolute Error (MAE): {mae:.2f}")
-print(f"✅ Mean Squared Error (MSE): {mse:.2f}")
-print(f"✅ R² Score: {r2:.2f}")
+print(f"✅ MAE: {mae:.2f}")
+print(f"✅ MSE: {mse:.2f}")
+print(f"✅ R^2: {r2:.2f}")
 
-# Save the trained model
-joblib.dump(model, "esg_model.pkl")
+# === Save model ===
+joblib.dump(xgb_model, "esg_model.pkl")
 print("✅ Model saved as 'esg_model.pkl'")
-
