@@ -1,116 +1,178 @@
-# Realtime ESG Risk Score Model with News-Driven Sentiment Enhancement
+# peacepie
+# 📘 ESG Risk Monitoring & Forecasting Platform
 
-## 📌 Project Summary
-This project is a **Realtime ESG Risk Assessment Tool** that blends structured ESG datasets with real-time news sentiment to dynamically score public companies on ESG (Environmental, Social, Governance) risk. It uses a pretrained **XGBoost regression model** and OpenAI’s FinBERT model for sentiment analysis, all deployed in a user-friendly Streamlit application.
+A real-time ESG intelligence tool designed for sustainable finance, enabling analysts to predict and monitor ESG risk through sentiment-aware modeling — aligned with SDG investment strategies and regulatory transparency goals.
 
-## 🌟 Key Features
-- ✅ Real-time ESG sentiment fetched from recent news headlines via NewsAPI
-- ✅ FinBERT-based sentiment classification on ESG-related news articles
-- ✅ Predictive ESG risk score generated using a trained XGBoost model
-- ✅ Comparison of predicted ESG scores vs original scores in dataset
-- ✅ Search and predict ESG scores for any company name or ticker
-- ✅ Visualization of ESG risk distribution and risk level breakdown
-- ✅ Delta column to understand shift between model score and baseline score
-- ✅ Streamlit web app interface with live prediction and analytics
 
-## 🛠️ Tech Stack
-- Python 3.10+
-- Streamlit (for the UI)
-- XGBoost (for regression model)
-- HuggingFace Transformers (FinBERT for sentiment analysis)
-- NewsAPI (real-time headline feed)
-- Pandas, NumPy, Seaborn, Matplotlib (data processing + plotting)
+---
 
-## 📁 Project Structure
+## 🧠 Overview
+
+This platform enables engineers and analysts to:
+
+* Train an XGBoost model on ESG + news sentiment features
+* Predict and track ESG risk scores over time
+* Compare recent deltas in ESG risk across companies
+* Expose an interactive user interface via Gradio
+* Receive email alerts when risk changes cross defined thresholds
+
+Built for extensibility and runtime flexibility, the pipeline allows toggling between batch training, inference, delta tracking, and UI deployment.
+
+---
+
+## 📁 Repository Structure
+
 ```
-├── esg_model.py              # Streamlit application frontend
-├── train_model.py           # XGBoost model training script
-├── sp500_esg.csv            # Input ESG dataset (S&P 500 companies)
-├── esg_model.pkl            # Pretrained XGBoost model file
-├── .streamlit/secrets.toml  # API key configuration
+.
+├── train_model.py            # Merges datasets, enriches with sentiment, trains XGBoost model
+├── esg_model.py              # Main batch prediction + Gradio UI interface
+├── esg_trend_agent.py        # Historical ESG delta checker with alert system
+├── merged_esg_data.csv       # Combined dataset for prediction/training
+├── esg_model.pkl             # Trained XGBoost regression model
+├── esg_score_history.csv     # ESG scores over time
+├── delta_log.csv             # Logged ESG risk changes
 ```
 
-## 📊 Dataset Overview
-The included dataset (`sp500_esg.csv`) contains ESG data for S&P 500 companies, with columns such as:
-- Company Name and Symbol
-- Total ESG Risk Score
-- Environment, Governance, and Social sub-scores
-- ESG Risk Percentile
-- Controversy Score
-- Industry and Sector metadata
+---
 
-## 🔍 What the Code Does
-### `esg_model.py`
-- Loads ESG data and a pretrained XGBoost model
-- Fetches recent ESG news (past ~3 days) using NewsAPI
-- Uses FinBERT to classify news headline sentiment (positive, neutral, negative)
-- Maps this sentiment to ESG impact score per company
-- Predicts new ESG risk scores using the XGBoost model
-- Compares predicted scores with original ESG risk scores
-- Allows user to:
-  - Search companies and compare risk levels
-  - Manually enter a company name and estimate its risk sentiment
-  - Visualize distribution and breakdown of risk levels
-  - Download the full ESG results
+## 🔧 Requirements
 
-### `train_model.py`
-- Loads and cleans the ESG dataset
-- Adds sentiment columns (if available)
-- Splits data into training/testing sets
-- Trains and saves an XGBoost regression model to predict ESG Risk Score
-
-## 📈 Model Features Used
-The XGBoost model uses the following features:
-- Environment Risk Score
-- Governance Risk Score
-- Social Risk Score
-- Controversy Score
-- ESG Risk Percentile
-- News Sentiment Score (derived from real-time news)
-
-## ⚙️ How It Works (Simplified)
-1. ESG scores + real-time sentiment = combined feature set
-2. XGBoost predicts new ESG risk score
-3. App compares this with original ESG score
-4. Shows Risk Level (Negligible → Severe)
-5. Allows interaction and filtering by company, score, or input
-
-## 📬 News Coverage Timeframe
-- ESG news headlines fetched from the **last 3 days** using NewsAPI
-- Sentiment classification runs on headlines only (no full articles)
-
-## 🚀 Getting Started
-1. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install pandas numpy scikit-learn xgboost transformers newsapi-python fuzzywuzzy gradio
 ```
 
-2. Add your NewsAPI key in:
-```
-.streamlit/secrets.toml
-```
-```toml
-NEWS_API_KEY = "your_key_here"
-```
+For improved `fuzzywuzzy` performance:
 
-3. Launch the Streamlit app:
 ```bash
-streamlit run esg_model.py
+pip install python-Levenshtein
 ```
 
-## 📤 Output
-The app exports a CSV file with:
-- Company Name, Symbol
-- Predicted ESG Risk Score
-- Total ESG Risk Score
-- Risk Level label
-- Risk Score Delta
+---
 
-<img width="1286" alt="Screenshot 2025-03-26 at 10 06 18 PM" src="https://github.com/user-attachments/assets/f21c8e49-cc09-4835-971b-23ec96fb273a" />
-<img width="1308" alt="Screenshot 2025-03-26 at 10 06 40 PM" src="https://github.com/user-attachments/assets/b3342933-f21a-4e0f-9032-22dc5867a97c" />
-<img width="1321" alt="Screenshot 2025-03-26 at 10 06 51 PM" src="https://github.com/user-attachments/assets/17ea1a6e-980c-4c55-aaee-110612d95792" />
-<img width="1263" alt="Screenshot 2025-03-26 at 10 07 13 PM" src="https://github.com/user-attachments/assets/d58f1f60-4f7f-4adb-91c9-21eecdf64c63" />
-<img width="1215" alt="Screenshot 2025-03-26 at 10 07 21 PM" src="https://github.com/user-attachments/assets/85dbca79-020f-456c-b9b3-51d7476da9e8" />
+## 🛠️ Configuration
 
+Set the following environment variables before running any script:
 
+```python
+os.environ["MODEL_PATH"] = "/path/to/esg_model.pkl"
+os.environ["DATA_PATH"] = "/path/to/merged_esg_data.csv"
+os.environ["HISTORY_FILE"] = "/path/to/esg_score_history.csv"
+os.environ["DELTA_LOG_FILE"] = "/path/to/delta_log.csv"
+os.environ["NEWS_API_KEY"] = "<your_newsapi_key>"
+```
 
+---
+
+## 🚀 Scripts
+
+### 1. `train_model.py`
+
+* Merges raw ESG datasets (SP500 + custom)
+* Enriches them with FinBERT sentiment from NewsAPI
+* Trains XGBoost regression model
+* Outputs: `esg_model.pkl`, `merged_esg_data.csv`
+
+```bash
+python3 train_model.py
+```
+
+---
+
+### 2. `esg_model.py`
+
+#### Runtime 1: Batch Inference
+
+* Fetches real-time sentiment (if `sys.argv != 'gradio_ui'`)
+* Predicts ESG risk scores
+* Appends to `esg_score_history.csv`
+* Triggers alert if risk delta exceeds threshold
+
+```bash
+python3 esg_model.py
+```
+
+#### Runtime 2: Gradio UI
+
+Launches an interactive ESG risk predictor.
+
+```bash
+python3 esg_model.py gradio_ui
+```
+
+**Gradio App Features:**
+
+* Dropdown company selector
+* Graceful fallback if 1 feature is missing (imputes default/mean)
+* Blocks prediction if 2+ features missing
+
+---
+
+### 3. `esg_trend_agent.py`
+
+Agentic pipeline to:
+
+* Recompute FinBERT sentiment in real time
+* Compare historical vs. current predictions
+* Append to history + log deltas
+* Send alert email if deltas > threshold
+
+```bash
+python3 esg_trend_agent.py
+```
+
+---
+
+## 📈 Model Inputs (Features)
+
+* `Environment Risk Score`
+* `Governance Risk Score`
+* `Social Risk Score`
+* `Controversy Score`
+* `ESG Risk Percentile`
+* `News Sentiment Score` *(from FinBERT)*
+
+---
+
+## 🛡️ Alerting Logic
+
+* ESG risk delta > 10 triggers email alert
+* Email sent via SMTP (Gmail SSL)
+* Top 3 companies with highest delta included
+
+---
+
+## 🧪 Example Use Cases
+
+* ESG trend tracking for S\&P 500
+* Identifying emerging ESG issues from news
+* Building ESG investment monitoring dashboards
+* Realtime interfaces for risk analysts or compliance teams
+
+---
+
+## 🧠 Future Enhancements
+
+* Add vector DB memory for persistent sentiment history
+* Integrate GDELT for global news ingestion
+* Allow user-input ESG values via UI + real-time prediction
+* Dashboard integrations (e.g., Streamlit sharing / Grafana)
+
+---
+
+## 👨‍💻 Author & License
+
+Created by \[Your Name] — MIT License. Feel free to fork, extend, and deploy.
+
+---
+
+## 🔗 Live Demo (Gradio)
+
+> Launch via:
+
+```bash
+python3 esg_model.py gradio_ui
+```
+
+> Shareable link will be printed in console after launch.
+
+---
